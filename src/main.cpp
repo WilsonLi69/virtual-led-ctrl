@@ -1,6 +1,24 @@
-#include <iostream>
+#include <sdbusplus/bus.hpp>
+#include <sdbusplus/server.hpp>
 
-int main() {
-  std::cout << "Hello World";
-  return 0;
+#include <iostream>
+#include <string>
+
+int main()
+{
+    // Create a new bus and affix an object manager for the subtree path we
+    // intend to place objects at..
+    auto bus = sdbusplus::bus::new_default();
+
+    std::string objPath = "/xyz/openbmc_project/led/physical/virtual_test";
+
+    sdbusplus::server::manager_t manager(bus, objPath.c_str());
+
+    std::cout << "Virtual LED D-Bus Service is running...\n";
+
+    bus.process_loop();
+
+    std::cout << "End of Virtual LED D-Bus Service ...\n";
+
+    return 0;
 }

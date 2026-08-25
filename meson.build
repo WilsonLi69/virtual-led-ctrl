@@ -6,9 +6,14 @@ project('virtual-led-ctrl', 'cpp',
     ]
 )
 
+sdbusplus_dep = dependency('sdbusplus')
+
 executable(
     'virtual-led-ctrl',
     'src/main.cpp',
+    dependencies: [
+        sdbusplus_dep,
+    ],
     install: true,
     install_dir: get_option('bindir')
 )
