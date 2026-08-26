@@ -10,6 +10,8 @@ int main()
     // intend to place objects at..
     auto bus = sdbusplus::bus::new_default();
 
+    bus.request_name("xyz.openbmc_project.LED.Controller.VirtualTest");
+
     std::string objPath = "/xyz/openbmc_project/led/physical/virtual_test";
 
     sdbusplus::server::manager_t manager(bus, objPath.c_str());
