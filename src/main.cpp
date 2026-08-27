@@ -9,6 +9,7 @@
 #include <xyz/openbmc_project/Led/Physical/server.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <string>
 
@@ -41,7 +42,7 @@ class LedController : public LedObject
         this->emit_object_added();
 
         std::cout << "LED Controller initialized on " << chipName << ", line "
-                  << lineOffset << "\n";
+                  << lineOffset << std::endl;
     }
 
     // When a client changes the State property via D-Bus, sdbusplus
@@ -51,18 +52,45 @@ class LedController : public LedObject
     {
         if (value == LedPhysicalInterface::Action::On)
         {
-            line.set_value(1);
-            std::cout << "D-Bus request: ON -> Set GPIO High\n";
+            timer.setEnabled(false);
+            setLedStatus(true);
+            std::cout << "D-Bus request: ON -> Set GPIO High" << std::endl;
         }
         else if (value == LedPhysicalInterface::Action::Off)
         {
-            line.set_value(0);
-            std::cout << "D-Bus request: OFF -> Set GPIO Low\n";
+            timer.setEnabled(false);
+            setLedStatus(false);
+            std::cout << "D-Bus request: OFF -> Set GPIO Low" << std::endl;
         }
         else if (value == LedPhysicalInterface::Action::Blink)
         {
-            std::cout << "D-Bus request: BLINK -> Start Timer\n";
-            timer.restart(std::chrono::milliseconds(500));
+            uint16_t periodMs = this->period();
+            if (periodMs == 0)
+                periodMs = 1000;
+            uint16_t duty = this->dutyOn();
+            if (duty > 100)
+                duty = 100;
+
+            std::cout << "D-Bus request: BLINK -> Period: " << periodMs
+                      << "ms, DutyOn: " << (int)duty << "%\n";
+
+            if (duty == 100)
+            {
+                timer.setEnabled(false);
+                setLedStatus(false);
+            }
+            else if (duty == 0)
+            {
+                timer.setEnabled(false);
+                setLedStatus(true);
+            }
+            else
+            {
+                setLedStatus(true);
+                auto onTime = std::chrono::milliseconds(periodMs * duty / 100);
+
+                timer.restart(std::chrono::milliseconds(onTime));
+            }
         }
 
         // Call the parent to store the new state in the property so that other
@@ -86,9 +114,25 @@ class LedController : public LedObject
 
     void toggleLed()
     {
+        uint16_t duty = this->dutyOn();
+        if (duty > 100)
+            duty = 100;
+        uint16_t periodMs = this->period();
+        if (periodMs == 0)
+            periodMs = 1000;
+
+        auto onTime = std::chrono::milliseconds(periodMs * duty / 100);
+        auto offTime = std::chrono::milliseconds(periodMs * (100 - duty) / 100);
+
         setLedStatus(!currentLedState);
+
+        auto waitTime = currentLedState ? onTime : offTime;
+
+        timer.restart(waitTime);
+
         std::cout << "Timer tick: LED is now "
-                  << (currentLedState ? "High" : "Low") << "\n";
+                  << (currentLedState ? "High" : "Low") << "(Wait " << waitTime
+                  << "ms)" << std::endl;
     }
 };
 
@@ -112,7 +156,7 @@ int main()
     // Instantiate LED controller
     LedController led(bus, objPath.c_str(), "gpiochip0", 0, event); // test pin
 
-    std::cout << "Virtual LED D-Bus Service is running...\n";
+    std::cout << "Virtual LED D-Bus Service is running..." << std::endl;
 
     return event.loop();
 }
