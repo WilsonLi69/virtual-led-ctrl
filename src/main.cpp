@@ -1,8 +1,14 @@
 #include <boost/asio.hpp>
+#include <boost/asio/error.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/system/detail/error_code.hpp>
 #include <gpiod.hpp>
 #include <sdbusplus/asio/connection.hpp>
 #include <sdbusplus/asio/object_server.hpp>
 
+#include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -10,9 +16,10 @@
 class VirtualLed
 {
   public:
-    VirtualLed(sdbusplus::asio::object_server& objectServer,
+    VirtualLed(boost::asio::io_context& io,
+               sdbusplus::asio::object_server& objectServer,
                const std::string& chipName, unsigned int lineOffset) :
-        chip(chipName)
+        chip(chipName), timer(io)
     {
         // Initialize the GPIO
         line = chip.get_line(lineOffset);
@@ -37,6 +44,23 @@ class VirtualLed
                 return 1;
             });
 
+        iface->register_property("Period", periodMs,
+                                 [this](const uint16_t& req, uint16_t& old) {
+                                     periodMs = req;
+                                     old = req;
+                                     if (stateStr == actionBlink)
+                                         applyState();
+                                     return 1;
+                                 });
+        iface->register_property("DutyOn", duty,
+                                 [this](const uint8_t& req, uint8_t& old) {
+                                     duty = req;
+                                     old = req;
+                                     if (stateStr == actionBlink)
+                                         applyState();
+                                     return 1;
+                                 });
+
         iface->initialize();
 
         std::cout << "LED Controller initialized on " << chipName << ", line "
@@ -53,8 +77,12 @@ class VirtualLed
     const std::string actionBlink =
         "xyz.openbmc_project.Led.Physical.Action.Blink";
 
+    boost::asio::steady_timer timer;
+
     bool currentLedState = false;
     std::string stateStr = "xyz.openbmc_project.Led.Physical.Action.Off";
+    uint16_t periodMs = 1000;
+    uint8_t duty = 50;
 
     void setLedStatus(bool status)
     {
@@ -64,6 +92,7 @@ class VirtualLed
 
     void applyState()
     {
+        timer.cancel();
         if (stateStr == actionOn)
         {
             setLedStatus(true);
@@ -74,13 +103,45 @@ class VirtualLed
             setLedStatus(false);
             std::cout << "D-Bus request: OFF -> Set GPIO Low" << std::endl;
         }
-        else if (false)
+        else if (stateStr == actionBlink)
         {
-            uint16_t periodMs;
-            uint16_t duty;
             std::cout << "D-Bus request: BLINK -> Period: " << periodMs
-                      << "ms, DutyOn: " << (int)duty << "%\n";
+                      << "ms, DutyOn: " << (int)duty << std::endl;
+            if (duty == 100)
+            {
+                setLedStatus(true);
+            }
+            else if (duty == 0)
+            {
+                setLedStatus(false);
+            }
+            else
+            {
+                setLedStatus(true);
+                scheduleNextBlink();
+            }
         }
+    }
+
+    void scheduleNextBlink()
+    {
+        uint32_t waitTimeMs = currentLedState ? (periodMs * duty / 100)
+                                              : (periodMs * (100 - duty) / 100);
+        timer.expires_after(std::chrono::milliseconds(waitTimeMs));
+
+        timer.async_wait([this](const boost::system::error_code& ec) {
+            if (ec == boost::asio::error::operation_aborted)
+            {
+                return;
+            }
+            if (ec)
+            {
+                std::cerr << "Timer error: " << ec.message() << std::endl;
+                return;
+            }
+            setLedStatus(!currentLedState);
+            scheduleNextBlink();
+        });
     }
 };
 
@@ -103,7 +164,7 @@ int main()
     sdbusplus::asio::object_server objectServer(systemBus);
 
     // Instantiate LED controller
-    VirtualLed led(objectServer, "gpiochip0", 0);
+    VirtualLed led(io, objectServer, "gpiochip0", 0);
 
     std::cout << "Virtual LED D-Bus Service is running..." << std::endl;
 
