@@ -5,11 +5,14 @@
 
 #include <iostream>
 #include <memory>
+#include <string>
 
 class VirtualLed
 {
   public:
-    VirtualLed(const std::string& chipName, unsigned int lineOffset)
+    VirtualLed(sdbusplus::asio::object_server& objectServer,
+               const std::string& chipName, unsigned int lineOffset) :
+        chip(chipName)
     {
         // Initialize the GPIO
         line = chip.get_line(lineOffset);
@@ -20,6 +23,22 @@ class VirtualLed
         // Request the line, defaulting to output low (0).
         line.request(request, 0);
 
+        // Register a D-Bus interface
+        std::string objPath = "/xyz/openbmc_project/led/physical/virtual_test";
+        iface = objectServer.add_interface(objPath,
+                                           "xyz.openbmc_project.Led.Physical");
+
+        iface->register_property(
+            "State", stateStr,
+            [this](const std::string& req, std::string& old) {
+                stateStr = req;
+                old = req;
+                applyState();
+                return 1;
+            });
+
+        iface->initialize();
+
         std::cout << "LED Controller initialized on " << chipName << ", line "
                   << lineOffset << std::endl;
     }
@@ -28,7 +47,14 @@ class VirtualLed
     gpiod::chip chip;
     gpiod::line line;
 
+    std::shared_ptr<sdbusplus::asio::dbus_interface> iface;
+    const std::string actionOn = "xyz.openbmc_project.Led.Physical.Action.On";
+    const std::string actionOff = "xyz.openbmc_project.Led.Physical.Action.Off";
+    const std::string actionBlink =
+        "xyz.openbmc_project.Led.Physical.Action.Blink";
+
     bool currentLedState = false;
+    std::string stateStr = "xyz.openbmc_project.Led.Physical.Action.Off";
 
     void setLedStatus(bool status)
     {
@@ -38,17 +64,17 @@ class VirtualLed
 
     void applyState()
     {
-        if (true)
+        if (stateStr == actionOn)
         {
             setLedStatus(true);
             std::cout << "D-Bus request: ON -> Set GPIO High" << std::endl;
         }
-        else if (true)
+        else if (stateStr == actionOff)
         {
             setLedStatus(false);
             std::cout << "D-Bus request: OFF -> Set GPIO Low" << std::endl;
         }
-        else if (true)
+        else if (false)
         {
             uint16_t periodMs;
             uint16_t duty;
@@ -75,6 +101,9 @@ int main()
     // Register an Object Manager on the bus to handle introspection
     // and to expose the objects managed by this service.
     sdbusplus::asio::object_server objectServer(systemBus);
+
+    // Instantiate LED controller
+    VirtualLed led(objectServer, "gpiochip0", 0);
 
     std::cout << "Virtual LED D-Bus Service is running..." << std::endl;
 
