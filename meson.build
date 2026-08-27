@@ -7,6 +7,7 @@ project('virtual-led-ctrl', 'cpp',
 )
 
 sdbusplus_dep = dependency('sdbusplus')
+sdeventplus_dep = dependency('sdeventplus')
 phosphor_dbus_interfaces_dep = dependency('phosphor-dbus-interfaces')
 libgpiod_cxx_dep = dependency('libgpiodcxx')
 
@@ -15,6 +16,7 @@ executable(
     'src/main.cpp',
     dependencies: [
         sdbusplus_dep,
+        sdeventplus_dep,
         phosphor_dbus_interfaces_dep,
         libgpiod_cxx_dep
     ],

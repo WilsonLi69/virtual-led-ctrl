@@ -1,8 +1,14 @@
+#include <systemd/sd-event.h>
+
 #include <gpiod.hpp>
 #include <sdbusplus/bus.hpp>
+#include <sdbusplus/event.hpp>
 #include <sdbusplus/server.hpp>
+#include <sdeventplus/event.hpp>
+#include <sdeventplus/utility/timer.hpp>
 #include <xyz/openbmc_project/Led/Physical/server.hpp>
 
+#include <chrono>
 #include <iostream>
 #include <string>
 
@@ -14,10 +20,12 @@ class LedController : public LedObject
 {
   public:
     LedController(sdbusplus::bus_t& bus, const char* path,
-                  const std::string& chipName, unsigned int lineOffset) :
-        LedObject(bus, path, action::defer_emit), chip(chipName)
+                  const std::string& chipName, unsigned int lineOffset,
+                  sdeventplus::Event& event) :
+        LedObject(bus, path, action::defer_emit), chip(chipName),
+        timer(event, [this](auto&) { this->toggleLed(); })
     {
-        // 1. Initialize the GPIO (via the libgpiod C++ API).
+        // Initialize the GPIO
         line = chip.get_line(lineOffset);
         gpiod::line_request request;
         request.request_type = gpiod::line_request::DIRECTION_OUTPUT;
@@ -26,10 +34,10 @@ class LedController : public LedObject
         // Request the line, defaulting to output low (0).
         line.request(request, 0);
 
-        // 2. Set the initial D-Bus state property.
+        // Set the initial D-Bus state property.
         LedObject::state(LedPhysicalInterface::Action::Off);
 
-        // 3. Ready: publish this object on D-Bus.
+        // Ready: publish this object on D-Bus.
         this->emit_object_added();
 
         std::cout << "LED Controller initialized on " << chipName << ", line "
@@ -53,9 +61,8 @@ class LedController : public LedObject
         }
         else if (value == LedPhysicalInterface::Action::Blink)
         {
-            std::cerr
-                << "Blink is not implemented in Phase 1! Defaulting to ON.\n";
-            line.set_value(1); // Phase 1 treats Blink as On for now.
+            std::cout << "D-Bus request: BLINK -> Start Timer\n";
+            timer.restart(std::chrono::milliseconds(500));
         }
 
         // Call the parent to store the new state in the property so that other
@@ -66,25 +73,46 @@ class LedController : public LedObject
   private:
     gpiod::chip chip;
     gpiod::line line;
+
+    sdeventplus::utility::Timer<sdeventplus::ClockId::Monotonic> timer;
+
+    bool currentLedState = false;
+
+    void setLedStatus(bool status)
+    {
+        currentLedState = status;
+        line.set_value(status ? 1 : 0);
+    }
+
+    void toggleLed()
+    {
+        setLedStatus(!currentLedState);
+        std::cout << "Timer tick: LED is now "
+                  << (currentLedState ? "High" : "Low") << "\n";
+    }
 };
 
 int main()
 {
-    // Create a new bus and affix an object manager for the subtree path we
-    // intend to place objects at..
+    std::string objPath = "/xyz/openbmc_project/led/physical/virtual_test";
+
+    // Create the event
+    auto event = sdeventplus::Event::get_default();
+
+    // Create a new bus
     auto bus = sdbusplus::bus::new_default();
 
     bus.request_name("xyz.openbmc_project.LED.Controller.VirtualTest");
 
-    std::string objPath = "/xyz/openbmc_project/led/physical/virtual_test";
+    bus.attach_event(event.get(), SD_EVENT_PRIORITY_NORMAL);
 
+    // Register an Object Manager
     sdbusplus::server::manager_t manager(bus, objPath.c_str());
+
+    // Instantiate LED controller
+    LedController led(bus, objPath.c_str(), "gpiochip0", 0, event); // test pin
 
     std::cout << "Virtual LED D-Bus Service is running...\n";
 
-    LedController led(bus, objPath.c_str(), "gpiochip0", 0); // test pin
-
-    bus.process_loop();
-
-    return 0;
+    return event.loop();
 }
